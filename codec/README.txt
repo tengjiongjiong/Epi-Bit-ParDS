@@ -12,8 +12,8 @@ described below. Use a file size that fits the experimental capacity.
 
 Encode an image or a ZIP archive:
 
-    python panda_encoding.py -i panda.avif --input-format file --pvs-output panda_encoded.csv
-    python panda_encoding.py -i sample.zip --input-format file --pvs-output zip_encoded.csv
+    python encoding.py -i panda.avif --input-format file --pvs-output panda_encoded.csv
+    python encoding.py -i sample.zip --input-format file --pvs-output zip_encoded.csv
 
 Record the original byte count printed by the encoder and keep the file
 extension. The PVS output is a headerless CSV with the interleaved,
@@ -45,7 +45,7 @@ Existing bit-text and AVIF workflows
 
 The existing 0/1 input and separate seed and codeword output still work:
 
-    python panda_encoding.py -i binary_info.txt -s seed.pkl -e encoded_info.txt
+    python encoding.py -i binary_info.txt -s seed.pkl -e encoded_info.txt
 
 To convert a JPG to a smaller AVIF before encoding, install Pillow and
 pillow-avif-plugin and run:

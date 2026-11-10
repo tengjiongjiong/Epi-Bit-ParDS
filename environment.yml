@@ -1,0 +1,20 @@
+name: Epi-env
+channels:
+  - conda-forge
+  - bioconda
+  - nodefaults
+dependencies:
+  - python=3.12
+  - numpy=1.26
+  - pandas=2.2
+  - matplotlib=3.9
+  - seaborn=0.13
+  - scikit-learn=1.5
+  - jupyterlab=4
+  - ipykernel=6
+  - pillow
+  - samtools=1.21
+  - pip
+  - pip:
+      - pyfinite==1.9.1
+      - pillow-avif-plugin
