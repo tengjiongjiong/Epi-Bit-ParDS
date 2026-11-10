@@ -72,12 +72,10 @@ class GF(ffield.FField):
         return roots
 
     def SubstituteElementIntoPoly(self, poly, a):
+        # Coefficients are stored in ascending order. Evaluate with Horner's rule.
         result = 0
-        for i in range(len(poly)):
-            tmp = self.Pow(a, i)
-            tmp = self.Multiply(tmp, poly[i])
-            result = self.Add(result, tmp)
-
+        for coefficient in reversed(poly):
+            result = self.Add(self.Multiply(result, a), coefficient)
         return result
 
     def ConjugateRoots(self, root):

@@ -1,159 +1,125 @@
 # -*- coding: utf-8 -*-
-"""
-BCH Encoding + Sparsification Processing Tool
-Function: Reads binary sequence files, groups the data, performs BCH encoding and sparsification, and outputs the processed results
-"""
+"""Encode a bit-text file or a raw file using BCH and sparsification."""
+
 import argparse
-import os
+import csv
 import pickle
-import numpy as np
-from bch_codes import bchencode
+from pathlib import Path
+
+from bch_codes import DATA_BITS, bchencode
 from sparse import sparse_seq
 
 
-def validate_file_path(path, is_input=True):
-    """Validate file path validity"""
-    if is_input and not os.path.exists(path):
-        raise FileNotFoundError(f"Input file does not exist: {path}")
-    # Check if output directory exists, create if not
-    output_dir = os.path.dirname(path)
-    if output_dir and not os.path.exists(output_dir) and not is_input:
-        os.makedirs(output_dir, exist_ok=True)
-    return path
+PVS_PAYLOAD_BITS = 234
 
 
 def process_binary_data(
     input_bin_file,
-    output_seed_file,
-    output_encoded_file,
-    group_length=91
+    output_seed_file=None,
+    output_encoded_file=None,
+    group_length=DATA_BITS,
+    *,
+    input_format="bits",
+    output_pvs_file=None,
 ):
-    """
-    Core processing function: Reads binary sequence, groups data, performs BCH encoding, 
-    sparsification and saves results
-    
-    Parameters:
-    input_bin_file: Path to input binary sequence file (e.g. binary_info.txt)
-    output_seed_file: Path to output seed pkl file (e.g. seed.pkl)
-    output_encoded_file: Path to output txt file with sparsified encoded sequence (e.g. encoded_info.txt)
-    group_length: Group length, default 91
-    """
-    # Validate file paths
-    input_bin_file = validate_file_path(input_bin_file, is_input=True)
-    output_seed_file = validate_file_path(output_seed_file, is_input=False)
-    output_encoded_file = validate_file_path(output_encoded_file, is_input=False)
+    """Write legacy sparsified BCH blocks or interleaved payloads with seeds."""
+    if output_pvs_file is None:
+        if output_seed_file is None or output_encoded_file is None:
+            raise ValueError("Provide both the seed file and the encoded file.")
+        output_paths = [Path(output_seed_file), Path(output_encoded_file)]
+    else:
+        if output_seed_file is not None or output_encoded_file is not None:
+            raise ValueError("Use either PVS output or the seed and encoded files.")
+        if group_length != DATA_BITS:
+            raise ValueError(f"PVS output requires {DATA_BITS}-bit BCH input blocks.")
+        output_paths = [Path(output_pvs_file)]
 
-    # Step 1: Read binary sequence file
-    print(f"Reading input file: {input_bin_file}")
-    with open(input_bin_file, 'r', encoding='utf-8') as f:
-        info = f.read().strip()  # Remove leading/trailing whitespace characters
-    
-    if not info:
-        raise ValueError("Input file is empty, please check the input file content")
-    
-    # Step 2: Group processing (padding with 0 to align)
-    print(f"Starting group processing, group length: {group_length}")
-    n_of_group = int(np.ceil(len(info) / group_length))
-    grouped_info = []
-    
-    for i in range(n_of_group):
-        start_idx = group_length * i
-        end_idx = group_length * (i + 1)
-        group = info[start_idx:end_idx]
-        # Pad last group with 0 to align length
-        if len(group) < group_length:
-            group += '0' * (group_length - len(group))
-        grouped_info.append(group)
-    
-    print(f"Grouping completed, generated {len(grouped_info)} groups of data")
+    if group_length <= 0:
+        raise ValueError("Group length must be positive.")
 
-    # Step 3: BCH encoding
-    print("Starting BCH encoding...")
-    encoded = []
-    for idx, group in enumerate(grouped_info):
-        try:
-            encoded_seq = bchencode(group)
-            encoded.append(encoded_seq)
-            if (idx + 1) % 100 == 0:  # Print progress every 100 groups
-                print(f"BCH encoding progress: {idx+1}/{len(grouped_info)}")
-        except Exception as e:
-            raise RuntimeError(f"Failed to perform BCH encoding on group {idx}: {str(e)}")
+    input_path = Path(input_bin_file)
+    if len({path.resolve() for path in [input_path, *output_paths]}) != 1 + len(output_paths):
+        raise ValueError("Input and output paths must be distinct.")
 
-    # Step 4: Sparsification processing
-    print("Starting sparsification processing...")
-    seed_list = []
-    sparsed_list = []
-    
-    for idx, enc_seq in enumerate(encoded):
-        try:
-            s, seq = sparse_seq(enc_seq)
-            seed_list.append(s)
-            sparsed_list.append(seq)
-            if (idx + 1) % 100 == 0:  # Print progress every 100 groups
-                print(f"Sparsification progress: {idx+1}/{len(encoded)}")
-            print(f"\rProcessing progress: {idx+1}/{len(encoded)}", end='', flush=True)
-        except Exception as e:
-            raise RuntimeError(f"Failed to sparsify group {idx}: {str(e)}")
-    print("\nSparsification processing completed")
+    if input_format == "file":
+        data = input_path.read_bytes()
+        info = "".join(f"{byte:08b}" for byte in data)
+    elif input_format == "bits":
+        info = "".join(input_path.read_text(encoding="utf-8").split())
+    else:
+        raise ValueError(f"Unknown input format: {input_format}")
 
-    # Step 5: Save result files
-    print(f"Saving seed file to: {output_seed_file}")
-    with open(output_seed_file, 'wb') as f:
-        pickle.dump(seed_list, f)
-    
-    print(f"Saving encoded file to: {output_encoded_file}")
-    with open(output_encoded_file, 'w', encoding='utf-8') as f2:
-        for line in sparsed_list:
-            f2.write(line)
-            f2.write('\n')
-    
-    print("All processing completed!")
+    if not info or set(info) - {"0", "1"}:
+        raise ValueError("Input must contain a nonempty sequence of 0 and 1 bits.")
+
+    encoded = [
+        bchencode(info[start:start + group_length].ljust(group_length, "0"))
+        for start in range(0, len(info), group_length)
+    ]
+
+    if output_pvs_file is not None:
+        # Interleave BCH codewords before splitting them into template payloads.
+        stream = "".join("".join(column) for column in zip(*encoded))
+        encoded = [
+            stream[start:start + PVS_PAYLOAD_BITS].ljust(PVS_PAYLOAD_BITS, "0")
+            for start in range(0, len(stream), PVS_PAYLOAD_BITS)
+        ]
+
+    rows = []
+    for index, sequence in enumerate(encoded, start=1):
+        result = sparse_seq(sequence)
+        if result is False:
+            raise RuntimeError(f"No sparsification seed found for row {index}.")
+        seed, bits = result
+        rows.append((bits, seed))
+
+    for path in output_paths:
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+    if output_pvs_file is not None:
+        with output_paths[0].open("w", encoding="utf-8", newline="") as output:
+            csv.writer(output).writerows(rows)
+    else:
+        seed_path, encoded_path = output_paths
+        with seed_path.open("wb") as output:
+            pickle.dump([seed for _, seed in rows], output)
+        with encoded_path.open("w", encoding="utf-8") as output:
+            for bits, _ in rows:
+                output.write(bits + "\n")
+
+    print(f"Encoded {len(info)} bits into {len(rows)} rows.")
+    if input_format == "file":
+        print(f"Original file size: {len(info) // 8} bytes. Record this for decoding.")
 
 
 def main():
-    # Parse command line arguments
-    parser = argparse.ArgumentParser(
-        description="BCH Encoding + Sparsification Processing Tool",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Usage examples:
-1. Basic usage:
-   python bch_sparse_tool.py -i binary_info.txt -s seed.pkl -e encoded_info.txt
-   
-2. Custom group length:
-   python bch_sparse_tool.py -i ./data/bin.txt -s ./output/seed.pkl -e ./output/encoded.txt -g 100
-        """
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("-i", "--input", required=True, help="Input file path")
+    parser.add_argument(
+        "--input-format",
+        choices=("bits", "file"),
+        default="bits",
+        help="Read 0/1 text (default) or the original bytes of an image, archive, or other file",
     )
-    
-    # Core parameters
-    parser.add_argument('-i', '--input', 
-                        required=True, 
-                        help='Path to input binary sequence file (required, e.g. binary_info.txt)')
-    parser.add_argument('-s', '--seed', 
-                        required=True, 
-                        help='Path to output seed pkl file (required, e.g. seed.pkl)')
-    parser.add_argument('-e', '--encoded', 
-                        required=True, 
-                        help='Path to output txt file with sparsified encoded sequence (required, e.g. encoded_info.txt)')
-    parser.add_argument('-g', '--group-length', 
-                        type=int, 
-                        default=91, 
-                        help='Group length, default 91')
-    
-    # Parse arguments
+    parser.add_argument("-s", "--seed", help="Legacy output file for the pickle seed list")
+    parser.add_argument("-e", "--encoded", help="Legacy output file for sparsified BCH blocks")
+    parser.add_argument(
+        "--pvs-output", help="Output CSV with interleaved payloads and seeds for sequencing-style decoding"
+    )
+    parser.add_argument("-g", "--group-length", type=int, default=DATA_BITS, help="BCH input block length")
     args = parser.parse_args()
-    
-    # Execute processing logic
+
     try:
         process_binary_data(
-            input_bin_file=args.input,
-            output_seed_file=args.seed,
-            output_encoded_file=args.encoded,
-            group_length=args.group_length
+            args.input,
+            args.seed,
+            args.encoded,
+            args.group_length,
+            input_format=args.input_format,
+            output_pvs_file=args.pvs_output,
         )
-    except Exception as e:
-        print(f"\nProcessing failed: {str(e)}")
-        exit(1)
+    except (OSError, ValueError, RuntimeError) as error:
+        parser.exit(1, f"Encoding failed: {error}\n")
 
 
 if __name__ == "__main__":
